@@ -68,15 +68,10 @@ bool Ekf::resetVelocity()
 	}
 
 	// calculate the change in velocity and apply to the output predictor state history
-	Vector3f velocity_change = _state.vel - vel_before_reset;
-	outputSample output_states = {};
-	unsigned max_index = _output_buffer.get_length() - 1;
+	const Vector3f velocity_change = _state.vel - vel_before_reset;
 
-	for (unsigned index = 0; index <= max_index; index++) {
-		output_states = _output_buffer.get_from_index(index);
-		output_states.vel += velocity_change;
-		_output_buffer.push_to_index(index, output_states);
-
+	for (uint8_t index = 0; index < _output_buffer.get_length(); index++) {
+		_output_buffer[index].vel += velocity_change;
 	}
 
 	// apply the change in velocity to our newest velocity estimate
@@ -131,17 +126,11 @@ bool Ekf::resetPosition()
 	}
 
 	// calculate the change in position and apply to the output predictor state history
-	Vector2f posNE_change;
-	posNE_change(0) = _state.pos(0) - posNE_before_reset(0);
-	posNE_change(1) = _state.pos(1) - posNE_before_reset(1);
-	outputSample output_states = {};
-	unsigned max_index = _output_buffer.get_length() - 1;
+	const Vector2f posNE_change{_state.pos(0) - posNE_before_reset(0), _state.pos(1) - posNE_before_reset(1)};
 
-	for (unsigned index = 0; index <= max_index; index++) {
-		output_states = _output_buffer.get_from_index(index);
-		output_states.pos(0) += posNE_change(0);
-		output_states.pos(1) += posNE_change(1);
-		_output_buffer.push_to_index(index, output_states);
+	for (uint8_t index = 0; index < _output_buffer.get_length(); index++) {
+		_output_buffer[index].pos(0) += posNE_change(0);
+		_output_buffer[index].pos(1) += posNE_change(1);
 	}
 
 	// apply the change in position to our newest position estimate
@@ -160,7 +149,7 @@ bool Ekf::resetPosition()
 void Ekf::resetHeight()
 {
 	// Get the most recent GPS data
-	gpsSample gps_newest = _gps_buffer.get_newest();
+	const gpsSample& gps_newest = _gps_buffer.get_newest();
 
 	// store the current vertical position and velocity for reference so we can calculate and publish the reset amount
 	float old_vert_pos = _state.pos(2);
@@ -193,7 +182,7 @@ void Ekf::resetHeight()
 			vert_pos_reset = true;
 
 			// reset the baro offset which is subtracted from the baro reading if we need to use it as a backup
-			baroSample baro_newest = _baro_buffer.get_newest();
+			const baroSample& baro_newest = _baro_buffer.get_newest();
 			_baro_hgt_offset = baro_newest.hgt + _state.pos(2);
 
 		} else {
@@ -203,7 +192,7 @@ void Ekf::resetHeight()
 
 	} else if (_control_status.flags.baro_hgt) {
 		// initialize vertical position with newest baro measurement
-		baroSample baro_newest = _baro_buffer.get_newest();
+		const baroSample& baro_newest = _baro_buffer.get_newest();
 
 		if (_time_last_imu - baro_newest.time_us < 2 * BARO_MAX_INTERVAL) {
 			_state.pos(2) = _hgt_sensor_offset - baro_newest.hgt + _baro_hgt_offset;
@@ -236,7 +225,7 @@ void Ekf::resetHeight()
 			vert_pos_reset = true;
 
 			// reset the baro offset which is subtracted from the baro reading if we need to use it as a backup
-			baroSample baro_newest = _baro_buffer.get_newest();
+			const baroSample& baro_newest = _baro_buffer.get_newest();
 			_baro_hgt_offset = baro_newest.hgt + _state.pos(2);
 
 		} else {
@@ -245,11 +234,13 @@ void Ekf::resetHeight()
 
 	} else if (_control_status.flags.ev_hgt) {
 		// initialize vertical position with newest measurement
-		extVisionSample ev_newest = _ext_vision_buffer.get_newest();
+		const extVisionSample& ev_newest = _ext_vision_buffer.get_newest();
 
 		// use the most recent data if it's time offset from the fusion time horizon is smaller
 		int32_t dt_newest = ev_newest.time_us - _imu_sample_delayed.time_us;
 		int32_t dt_delayed = _ev_sample_delayed.time_us - _imu_sample_delayed.time_us;
+
+		vert_pos_reset = true;
 
 		if (std::abs(dt_newest) < std::abs(dt_delayed)) {
 			_state.pos(2) = ev_newest.posNED(2);
@@ -306,22 +297,26 @@ void Ekf::resetHeight()
 	}
 
 	// add the reset amount to the output observer buffered data
-	outputSample output_states = {};
-	unsigned output_length = _output_buffer.get_length();
-
-	for (unsigned i = 0; i < output_length; i++) {
-		output_states = _output_buffer.get_from_index(i);
-
+	for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
 		if (vert_pos_reset) {
-			output_states.pos(2) += _state_reset_status.posD_change;
+			_output_buffer[i].pos(2) += _state_reset_status.posD_change;
+			_output_vert_buffer[i].vel_d_integ += _state_reset_status.posD_change;
 		}
 
 		if (vert_vel_reset) {
-			output_states.vel(2) += _state_reset_status.velD_change;
+			_output_buffer[i].vel(2) += _state_reset_status.velD_change;
+			_output_vert_buffer[i].vel_d += _state_reset_status.velD_change;
 		}
+	}
 
-		_output_buffer.push_to_index(i, output_states);
-
+	// add the reset amount to the output observer vertical position state
+	if (vert_pos_reset) {
+		_output_vert_delayed.vel_d_integ = _state.pos(2);
+		_output_vert_new.vel_d_integ = _state.pos(2);
+	}
+	if (vert_vel_reset) {
+		_output_vert_delayed.vel_d = _state.vel(2);
+		_output_vert_new.vel_d = _state.vel(2);
 	}
 }
 
@@ -329,25 +324,20 @@ void Ekf::resetHeight()
 void Ekf::alignOutputFilter()
 {
 	// calculate the quaternion delta between the output and EKF quaternions at the EKF fusion time horizon
-	Quatf quat_inv = _state.quat_nominal.inversed();
-	Quatf q_delta =   quat_inv * _output_sample_delayed.quat_nominal;
+	Quatf q_delta = _state.quat_nominal.inversed() * _output_sample_delayed.quat_nominal;
 	q_delta.normalize();
 
 	// calculate the velocity and posiiton deltas between the output and EKF at the EKF fusion time horizon
-	Vector3f vel_delta = _state.vel - _output_sample_delayed.vel;
-	Vector3f pos_delta = _state.pos - _output_sample_delayed.pos;
+	const Vector3f vel_delta = _state.vel - _output_sample_delayed.vel;
+	const Vector3f pos_delta = _state.pos - _output_sample_delayed.pos;
 
 	// loop through the output filter state history and add the deltas
-	outputSample output_states = {};
-	unsigned output_length = _output_buffer.get_length();
-
-	for (unsigned i = 0; i < output_length; i++) {
-		output_states = _output_buffer.get_from_index(i);
-		output_states.quat_nominal = q_delta * output_states.quat_nominal;
-		output_states.quat_nominal.normalize();
-		output_states.vel += vel_delta;
-		output_states.pos += pos_delta;
-		_output_buffer.push_to_index(i, output_states);
+	// Note q1 *= q2 is equivalent to q1 = q2 * q1
+	for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
+		_output_buffer[i].quat_nominal *= q_delta;
+		_output_buffer[i].quat_nominal.normalize();
+		_output_buffer[i].vel += vel_delta;
+		_output_buffer[i].pos += pos_delta;
 	}
 }
 
@@ -454,12 +444,9 @@ bool Ekf::realignYawGPS()
 			_state_reset_status.quat_change = quat_before_reset.inversed() * _state.quat_nominal;
 
 			// add the reset amount to the output observer buffered data
-			outputSample output_states;
-			unsigned output_length = _output_buffer.get_length();
-			for (unsigned i = 0; i < output_length; i++) {
-				output_states = _output_buffer.get_from_index(i);
-				output_states.quat_nominal = _state_reset_status.quat_change * output_states.quat_nominal;
-				_output_buffer.push_to_index(i, output_states);
+			// Note q1 *= q2 is equivalent to q1 = q2 * q1
+			for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
+				_output_buffer[i].quat_nominal *= _state_reset_status.quat_change;
 			}
 
 			// apply the change in attitude quaternion to our newest quaternion estimate
@@ -679,13 +666,9 @@ bool Ekf::resetMagHeading(Vector3f &mag_init)
 		initialiseQuatCovariances(angle_err_var_vec);
 
 		// add the reset amount to the output observer buffered data
-		outputSample output_states = {};
-		unsigned output_length = _output_buffer.get_length();
-
-		for (unsigned i = 0; i < output_length; i++) {
-			output_states = _output_buffer.get_from_index(i);
-			output_states.quat_nominal = _state_reset_status.quat_change * output_states.quat_nominal;
-			_output_buffer.push_to_index(i, output_states);
+		for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
+			// Note q1 *= q2 is equivalent to q1 = q2 * q1
+			_output_buffer[i].quat_nominal *= _state_reset_status.quat_change;
 		}
 
 		// apply the change in attitude quaternion to our newest quaternion estimate
@@ -785,6 +768,12 @@ void Ekf::calcEarthRateNED(Vector3f &omega, double lat_rad) const
 void Ekf::get_vel_pos_innov(float vel_pos_innov[6])
 {
 	memcpy(vel_pos_innov, _vel_pos_innov, sizeof(float) * 6);
+}
+
+// gets the innovations of the earth magnetic field measurements
+void Ekf::get_aux_vel_innov(float aux_vel_innov[2])
+{
+	memcpy(aux_vel_innov, _aux_vel_innov, sizeof(float) * 2);
 }
 
 // writes the innovations of the earth magnetic field measurements
@@ -1120,7 +1109,7 @@ bool Ekf::reset_imu_bias()
 // Innovation Test Ratios - these are the ratio of the innovation to the acceptance threshold.
 // A value > 1 indicates that the sensor measurement has exceeded the maximum acceptable level and has been rejected by the EKF
 // Where a measurement type is a vector quantity, eg magnetoemter, GPS position, etc, the maximum value is returned.
-void Ekf::get_innovation_test_status(uint16_t *status, float *mag, float *vel, float *pos, float *hgt, float *tas, float *hagl)
+void Ekf::get_innovation_test_status(uint16_t *status, float *mag, float *vel, float *pos, float *hgt, float *tas, float *hagl, float *beta)
 {
 	// return the integer bitmask containing the consistency check pass/fail satus
 	*status = _innov_check_fail_status.value;
@@ -1136,6 +1125,8 @@ void Ekf::get_innovation_test_status(uint16_t *status, float *mag, float *vel, f
 	*tas = sqrtf(_tas_test_ratio);
 	// return the terrain height innovation test ratio
 	*hagl = sqrtf(_terr_test_ratio);
+	// return the synthetic sideslip innovation test ratio
+	*beta = sqrtf(_beta_test_ratio);
 }
 
 // return a bitmask integer that describes which state estimates are valid
@@ -1514,42 +1505,16 @@ void Ekf::calcExtVisRotMat()
 	q_error.normalize();
 
 	// convert to a delta angle and apply a spike and low pass filter
-	Vector3f rot_vec;
-	float delta;
-	float scaler;
-	if (q_error(0) >= 0.0f) {
-	    delta = 2 * acosf(q_error(0));
-	    if (delta > 1e-6f) {
-		    scaler = 1.0f /  sinf(delta/2);
-	    } else {
-		    // The rotation is too small to calculate a vector accurately
-		    // Make the rotation vector zero
-		    scaler = 0.0f;
-	    }
-	} else {
-	    delta = 2 * acosf(-q_error(0));
-	    if (delta > 1e-6f) {
-		   scaler = -1.0f /  sinf(delta/2);
-	    } else {
-		    // The rotation is too small to calculate a vector accurately
-		    // Make the rotation vector zero
-		    scaler = 0.0f;
-	    }
-	}
-	rot_vec(0) = q_error(2) * scaler;
-	rot_vec(1) = q_error(3) * scaler;
-	rot_vec(2) = q_error(4) * scaler;
+	Vector3f rot_vec = q_error.to_axis_angle();
 
 	float rot_vec_norm = rot_vec.norm();
 	if (rot_vec_norm > 1e-6f) {
-		// ensure magnitude of rotation matches the quaternion
-		rot_vec = rot_vec * (delta / rot_vec_norm);
 
 		// apply an input limiter to protect from spikes
 		Vector3f _input_delta_vec = rot_vec - _ev_rot_vec_filt;
 		float input_delta_mag = _input_delta_vec.norm();
 		if (input_delta_mag > 0.1f) {
-			rot_vec = _ev_rot_vec_filt + rot_vec * (0.1f / input_delta_mag);
+			rot_vec = _ev_rot_vec_filt + _input_delta_vec * (0.1f / input_delta_mag);
 		}
 
 		// Apply a first order IIR low pass filter
@@ -1576,23 +1541,11 @@ void Ekf::resetExtVisRotMat()
 	q_error.normalize();
 
 	// convert to a delta angle and reset
-	Vector3f rot_vec;
-	float delta;
-	if (q_error(0) >= 0.0f) {
-	    delta = 2 * acosf(q_error(0));
-	    rot_vec(0) = q_error(1) / sinf(delta/2);
-	    rot_vec(1) = q_error(2) / sinf(delta/2);
-	    rot_vec(2) = q_error(3) / sinf(delta/2);
-	} else {
-	    delta = 2 * acosf(-q_error(1));
-	    rot_vec(0) = -q_error(2) / sinf(delta/2);
-	    rot_vec(1) = -q_error(3) / sinf(delta/2);
-	    rot_vec(2) = -q_error(4) / sinf(delta/2);
-	}
+	Vector3f rot_vec = q_error.to_axis_angle();
 
 	float rot_vec_norm = rot_vec.norm();
 	if (rot_vec_norm > 1e-9f) {
-		_ev_rot_vec_filt = rot_vec * delta / rot_vec_norm;
+		_ev_rot_vec_filt = rot_vec;
 	} else {
 		_ev_rot_vec_filt.zero();
 	}
@@ -1610,4 +1563,3 @@ void Ekf::get_ekf2ev_quaternion(float *quat)
 		quat[i] = quat_ekf2ev(i);
 	}
 }
-

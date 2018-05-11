@@ -156,6 +156,12 @@ struct dragSample {
 	uint64_t time_us;	///< timestamp of the measurement (uSec)
 };
 
+struct auxVelSample {
+	Vector2f velNE;		///< measured NE velocity relative to the local origin (m/sec)
+	Vector2f velVarNE;	///< estimated error variance of the NE velocity (m/sec)**2
+	uint64_t time_us;	///< timestamp of the measurement (uSec)
+};
+
 // Integer definitions for vdist_sensor_type
 #define VDIST_SENSOR_BARO  0	///< Use baro height
 #define VDIST_SENSOR_GPS   1	///< Use GPS height
@@ -192,6 +198,9 @@ struct dragSample {
 #define BADACC_PROBATION  (uint64_t)10e6	///< Period of time that accel data declared bad must continuously pass checks to be declared good again (uSec)
 #define BADACC_BIAS_PNOISE	4.9f	///< The delta velocity process noise is set to this when accel data is declared bad (m/sec**2)
 
+// ground effect compensation
+#define GNDEFFECT_TIMEOUT	10E6	///< Maximum period of time that ground effect protection will be active after it was last turned on (uSec)
+
 struct parameters {
 	// measurement source control
 	int32_t fusion_mode{MASK_USE_GPS};		///< bitmasked integer that selects which aiding sources will be used
@@ -207,6 +216,7 @@ struct parameters {
 	float flow_delay_ms{5.0f};		///< optical flow measurement delay relative to the IMU (mSec) - this is to the middle of the optical flow integration interval
 	float range_delay_ms{5.0f};		///< range finder measurement delay relative to the IMU (mSec)
 	float ev_delay_ms{100.0f};		///< off-board vision measurement delay relative to the IMU (mSec)
+	float auxvel_delay_ms{0.0f};		///< auxiliary velocity measurement delay relative to the IMU (mSec)
 
 	// input noise
 	float gyro_noise{1.5e-2f};		///< IMU angular rate noise used for covariance prediction (rad/sec)
@@ -235,6 +245,8 @@ struct parameters {
 	float baro_innov_gate{5.0f};		///< barometric and GPS height innovation consistency gate size (STD)
 	float posNE_innov_gate{5.0f};		///< GPS horizontal position innovation consistency gate size (STD)
 	float vel_innov_gate{5.0f};		///< GPS velocity innovation consistency gate size (STD)
+	float gnd_effect_deadzone{5.0f};	///< Size of deadzone applied to negative baro innovations when ground effect compensation is active (m)
+	float gnd_effect_max_hgt{0.5f};		///< Height above ground at which baro ground effect becomes insignificant (m)
 
 	// magnetometer fusion
 	float mag_heading_noise{3.0e-1f};	///< measurement noise used for simple heading fusion (rad)
@@ -321,6 +333,9 @@ struct parameters {
 	float vert_innov_test_lim{4.5f};	///< Number of standard deviations allowed before the combined vertical velocity and position test is declared as failed
 	int bad_acc_reset_delay_us{500000};	///< Continuous time that the vertical position and velocity innovation test must fail before the states are reset (uSec)
 
+	// auxilliary velocity fusion
+	float auxvel_noise{0.5f};		///< minimum observation noise, uses reported noise if greater (m/s)
+	float auxvel_gate{5.0f};		///< velocity fusion innovation consistency gate size (STD)
 };
 
 struct stateSample {
@@ -416,7 +431,8 @@ union filter_control_status_u {
 		uint32_t update_mag_states_only   : 1; ///< 16 - true when only the magnetometer states are updated by the magnetometer
 		uint32_t fixed_wing  : 1; ///< 17 - true when the vehicle is operating as a fixed wing vehicle
 		uint32_t mag_fault   : 1; ///< 18 - true when the magnetomer has been declared faulty and is no longer being used
-		uint32_t fuse_aspd   : 1; ///< 19 - true when airspedd measurements are being fused
+		uint32_t fuse_aspd   : 1; ///< 19 - true when airspeed measurements are being fused
+		uint32_t gnd_effect  : 1; ///< 20 - true when protection from ground effect induced static pressure rise is active
 	} flags;
 	uint32_t value;
 };
