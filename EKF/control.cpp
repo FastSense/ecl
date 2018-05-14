@@ -311,7 +311,8 @@ void Ekf::controlExternalVisionFusion()
 			fuseHeading();
 
 		}
-	} else if (_control_status.flags.ev_pos && (_time_last_imu - _time_last_ext_vision > (uint64_t)5e6)) {
+//	} else if (_control_status.flags.ev_pos && (_time_last_imu - _time_last_ext_vision > (uint64_t)5e6)) {
+   } else if (_control_status.flags.ev_pos && (abs((int64_t)_time_last_imu - (int64_t)_time_last_ext_vision) > (uint64_t)5e6)) {
 		// Turn off EV fusion mode if no data has been received
 		_control_status.flags.ev_pos = false;
 		ECL_INFO("EKF External Vision Data Stopped");
@@ -747,7 +748,8 @@ void Ekf::controlHeightSensorTimeouts()
 		if (_control_status.flags.ev_hgt) {
 			// check if vision data is available
 			const extVisionSample& ev_init = _ext_vision_buffer.get_newest();
-			bool ev_data_available = ((_time_last_imu - ev_init.time_us) < 2 * EV_MAX_INTERVAL);
+			bool ev_data_available = ((abs((int64_t)_time_last_imu - (int64_t)ev_init.time_us)) < 2 * EV_MAX_INTERVAL);
+
 
 			// check if baro data is available
 			const baroSample& baro_init = _baro_buffer.get_newest();
